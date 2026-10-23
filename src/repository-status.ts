@@ -546,9 +546,11 @@ export class RepositoryStatusService {
       const pullRequest = branch === undefined || remote === undefined
         ? undefined
         : await this.#pullRequest(cwd, remote, branch)
-      const diffBase = pullRequest?.baseBranch === undefined
-        ? 'HEAD'
-        : await this.#mergeBase(cwd, git, pullRequest.baseBranch) ?? 'HEAD'
+      // Without a pull request the branch is measured against origin's
+      // default branch (refs/remotes/origin/HEAD), so committed work stays
+      // visible before it is pushed; a checkout without that ref falls back
+      // to the working tree alone.
+      const diffBase = await this.#mergeBase(cwd, git, pullRequest?.baseBranch ?? 'HEAD') ?? 'HEAD'
       const diff = status.dirty || diffBase !== 'HEAD'
         ? await this.#diff(cwd, git, diffBase, signal)
         : { additions: 0, deletions: 0, files: 0, truncated: false }

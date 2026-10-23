@@ -260,6 +260,7 @@ describe('repository status service', () => {
       { stdout: '/repo\n/repo/.git\n/repo/.git\n' },
       { stdout: '# branch.head main\n1 .M N... file.ts\n1 .M N... pnpm-lock.yaml\n' },
       { stdout: '', exitCode: 2 },
+      { stdout: '', exitCode: 128 },
       { stdout: '1\t1\tfile.ts\n40000\t40000\tpnpm-lock.yaml\n' },
       { stdout: `${small}${huge}` },
       { stdout: '' },
@@ -273,6 +274,7 @@ describe('repository status service', () => {
       { stdout: '/repo\n/repo/.git\n/repo/.git\n' },
       { stdout: '# branch.head main\n1 .M N... file.ts\n' },
       { stdout: '', exitCode: 2 },
+      { stdout: '', exitCode: 128 },
       { stdout: '4\t3\tfile.ts\n' },
       { stdout: 'partial patch', lossy: true },
       { stdout: '' },
@@ -285,6 +287,7 @@ describe('repository status service', () => {
       { stdout: '/repo\n/repo/.git\n/repo/.git\n' },
       { stdout: '# branch.head main\n1 .M N... file.ts\n' },
       { stdout: '', exitCode: 2 },
+      { stdout: '', exitCode: 128 },
       { stdout: '4\t3\tfile.ts\n' },
       { stdout: 'partial patch', lossy: true },
       { stdout: '' },
@@ -297,6 +300,7 @@ describe('repository status service', () => {
       { stdout: '/repo\n/repo/.git\n/repo/.git\n' },
       { stdout: '# branch.head main\n1 .M N... file.ts\n? new.ts\n' },
       { stdout: '', exitCode: 2 },
+      { stdout: '', exitCode: 128 },
       { stdout: '2\t1\tfile.ts\n' },
       { stdout: 'diff --git a/file.ts b/file.ts\n@@ -1 +1 @@\n-old\n+new\n+more\n' },
       { stdout: 'new.ts\0empty.ts\0' },
@@ -307,10 +311,28 @@ describe('repository status service', () => {
     expect(status.diff).toMatchObject({ additions: 5, deletions: 1, files: 3, truncated: false })
     expect(status.diff?.patch).toContain('diff --git a/file.ts b/file.ts')
     expect(status.diff?.patch).toContain('diff --git a/new.ts b/new.ts')
-    expect(fake.spawn.mock.calls[5]?.[0].argv).toEqual(['/bin/git', 'ls-files', '--others', '--exclude-standard', '-z'])
-    expect(fake.spawn.mock.calls[6]?.[0].argv).toEqual([
+    expect(fake.spawn.mock.calls[6]?.[0].argv).toEqual(['/bin/git', 'ls-files', '--others', '--exclude-standard', '-z'])
+    expect(fake.spawn.mock.calls[7]?.[0].argv).toEqual([
       '/bin/git', 'diff', '--no-ext-diff', '--no-color', '--unified=3', '--numstat', '--patch', '--no-index', '--', '/dev/null', 'new.ts',
     ])
+  })
+
+  it('shows a branch with no pull request against origin\'s default branch', async () => {
+    const base = 'a'.repeat(40)
+    const patch = 'diff --git a/file.ts b/file.ts\n@@ -1 +1 @@\n-old\n+new\n'
+    const fake = runtime([
+      { stdout: '/repo\n/repo/.git\n/repo/.git\n' },
+      { stdout: '# branch.head fix/thing\n' },
+      { stdout: '', exitCode: 2 },
+      { stdout: `${base}\n` },
+      { stdout: '1\t1\tfile.ts\n' },
+      { stdout: patch },
+      { stdout: '' },
+    ])
+    const status = await new RepositoryStatusService(fake).inspect('/repo')
+    expect(status.diff).toMatchObject({ additions: 1, deletions: 1, files: 1, truncated: false, patch })
+    expect(fake.spawn.mock.calls[3]?.[0].argv).toEqual(['/bin/git', 'merge-base', 'HEAD', 'refs/remotes/origin/HEAD'])
+    expect(fake.spawn.mock.calls[4]?.[0].argv).toEqual(['/bin/git', 'diff', '--no-ext-diff', '--numstat', base, '--'])
   })
 
   it('degrades for non-repositories and unavailable executables without leaking errors', async () => {
