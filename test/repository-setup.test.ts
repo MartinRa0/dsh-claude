@@ -181,7 +181,7 @@ describe('repository setup service', () => {
       '/bin/git', 'for-each-ref', '--format=%(upstream:short)', 'refs/heads/main',
     ])
     const worktreeAdd = fake.spawn.mock.calls[6]?.[0].argv
-    expect(worktreeAdd?.slice(0, 4)).toEqual(['/bin/git', 'worktree', 'add', '-b'])
+    expect(worktreeAdd?.slice(0, 5)).toEqual(['/bin/git', 'worktree', 'add', '--no-track', '-b'])
     // No upstream reported, so the local branch stays the base.
     expect(worktreeAdd?.at(-1)).toBe('refs/heads/main')
     expect(fake.spawn.mock.calls[7]?.[0].argv).toEqual(['/bin/git', 'worktree', 'remove', '--force', '--', result.path])

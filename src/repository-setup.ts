@@ -572,9 +572,12 @@ export class RepositorySetupService {
     // A stale registration from a deleted worktree directory would keep the
     // existing branch "checked out" and block reusing it.
     if (reuseExistingBranch) await this.#run(git, ['worktree', 'prune'], root).catch(() => undefined)
+    // `--no-track`: started from origin/<base>, git would otherwise set the
+    // base as the new branch's upstream, and with push.default=upstream the
+    // first `git push` lands the work straight on the base branch.
     const created = await this.#run(
       git,
-      reuseExistingBranch ? ['worktree', 'add', '--', path, branch] : ['worktree', 'add', '-b', branch, path, startRef],
+      reuseExistingBranch ? ['worktree', 'add', '--', path, branch] : ['worktree', 'add', '--no-track', '-b', branch, path, startRef],
       root,
     )
     if (created.exitCode !== 0) {
