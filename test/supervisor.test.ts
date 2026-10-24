@@ -2819,7 +2819,7 @@ describe('Claude supervisor', () => {
 describe('Claude native renderer mirroring', () => {
   const native = (create: ClaudeQueryFactory) => supervisor(create, 4, 60_000, undefined, 'native')
 
-  it('mirrors root Claude tools into the native tool channel while keeping the sidecar transcript', async () => {
+  it('never appends raw tool events a v4 session log would reject on reload (issue #57)', async () => {
     const transport = factory()
     const owner = fakeAgent()
     const runtime = native(transport.create)
@@ -2828,17 +2828,20 @@ describe('Claude native renderer mirroring', () => {
     query.push(init())
     query.push(toolCallMessage)
     query.push(toolResultMessage)
+    query.push({
+      type: 'system',
+      subtype: 'permission_denied',
+      tool_use_id: 'tool-1',
+      tool_name: 'Bash',
+      message: 'The user rejected this action in DeepSeek Harness.',
+    } as SDKMessage)
     query.push(result('done'))
     await collect(output)
 
-    const call = owner.events.find(event => event.type === 'tool/call')
-    expect(call?.data).toMatchObject({ turn: 1, step: 1, callId: 'tool-1', name: 'Bash' })
-    expect(JSON.parse((call?.data as { arguments: string }).arguments)).toEqual({ command: 'ls -la' })
-    const settled = owner.events.find(event => event.type === 'tool/result')
-    expect(settled).toBeDefined()
-    expect(JSON.stringify(settled?.data)).toContain('listed')
-    // The sidecar keeps its record either way: the diff column, tasks panel,
-    // and rewind all read it regardless of who paints the transcript.
+    // DSH v4 only accepts a `tool/call` that its own assistant message
+    // advertised first, which a Claude-owned call never has.
+    expect(owner.events.some(event => event.type === 'tool/call' || event.type === 'tool/result')).toBe(false)
+    expect(owner.registeredTools).toEqual([])
     await expect(projection(runtime)).resolves.toMatchObject({
       activities: expect.arrayContaining([
         expect.objectContaining({ kind: 'tool-call', toolUseId: 'tool-1', toolName: 'Bash' }),
@@ -2847,90 +2850,7 @@ describe('Claude native renderer mirroring', () => {
     await runtime.dispose()
   })
 
-  it('mirrors Task dispatches the plugin renderer would have grouped into its own card', async () => {
-    const transport = factory()
-    const owner = fakeAgent()
-    const runtime = native(transport.create)
-    const output = await runtime.runTurn({ agent: owner.agent, prompt: 'explore' })
-    const query = transport.queries[0]!
-    query.push(init())
-    query.push({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'tool_use', id: 'task-1', name: 'Task', input: { description: 'Explore Navi module', prompt: 'survey' } }],
-      },
-    } as SDKMessage)
-    query.push(result('done'))
-    await collect(output)
-
-    expect(owner.events.some(event => event.type === 'tool/call' && (event.data as { name: string }).name === 'Task')).toBe(true)
-    await runtime.dispose()
-  })
-
-  it('settles a denied call as a failed native result instead of leaving the card pending', async () => {
-    const transport = factory()
-    const owner = fakeAgent()
-    const runtime = native(transport.create)
-    const output = await runtime.runTurn({ agent: owner.agent, prompt: 'pull latest' })
-    const query = transport.queries[0]!
-    query.push(init())
-    query.push(toolCallMessage)
-    query.push({
-      type: 'system',
-      subtype: 'permission_denied',
-      tool_use_id: 'tool-1',
-      tool_name: 'Bash',
-      message: 'The user rejected this action in DeepSeek Harness.',
-    } as SDKMessage)
-    query.push(result('not pulled'))
-    await collect(output)
-
-    const settled = owner.events.find(event => event.type === 'tool/result')
-    expect(settled).toBeDefined()
-    expect(JSON.stringify(settled?.data)).toContain('rejected')
-    await runtime.dispose()
-  })
-
-  it('registers dynamic presenters for runtime-discovered tool names and leaves nested calls alone', async () => {
-    const transport = factory()
-    const owner = fakeAgent()
-    const runtime = native(transport.create)
-    const output = await runtime.runTurn({ agent: owner.agent, prompt: 'search the vault' })
-    const query = transport.queries[0]!
-    query.push(init())
-    query.push({
-      type: 'assistant',
-      message: {
-        role: 'assistant',
-        content: [
-          { type: 'tool_use', id: 'mcp-1', name: 'mcp__obsidian__search_simple', input: { query: 'Navi' } },
-          { type: 'tool_use', id: 'mcp-2', name: 'mcp__obsidian__search_simple', input: { query: 'Slack' } },
-          { type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'ls' } },
-        ],
-      },
-    } as SDKMessage)
-    query.push({
-      type: 'assistant',
-      parent_tool_use_id: 'parent-call',
-      message: {
-        role: 'assistant',
-        content: [{ type: 'tool_use', id: 'nested-1', name: 'Read', input: { file_path: 'README.md' } }],
-      },
-    } as SDKMessage)
-    query.push(result('done'))
-    await collect(output)
-
-    // One mirror per unseen name; Bash is already in the static preset registry.
-    expect(owner.registeredTools).toEqual(['mcp__obsidian__search_simple'])
-    const mirrored = owner.events.filter(event => event.type === 'tool/call').map(event => (event.data as { callId: string }).callId)
-    // A subagent's nested tool belongs to the Task card that dispatched it and
-    // has nothing to nest under in the native channel.
-    expect(mirrored).toEqual(['mcp-1', 'mcp-2', 'bash-1'])
-    await runtime.dispose()
-  })
-
-  it('stamps every record it writes so the Client suppresses the plugin transcript per step', async () => {
+  it('stamps what DSH draws and leaves the tool cards to the plugin transcript', async () => {
     const transport = factory()
     const owner = fakeAgent()
     const runtime = native(transport.create)
@@ -2946,8 +2866,12 @@ describe('Claude native renderer mirroring', () => {
     const activities = (await projection(runtime)).activities
     // Prose included: a step whose only record is text must still declare its
     // renderer, or the plugin transcript would redraw the natively streamed answer.
-    expect(activities.filter(activity => activity.kind === 'text').length).toBeGreaterThan(0)
-    expect(activities.every(activity => activity.renderer === 'native')).toBe(true)
+    const text = activities.filter(activity => activity.kind === 'text')
+    expect(text.length).toBeGreaterThan(0)
+    expect(text.every(activity => activity.renderer === 'native')).toBe(true)
+    const tools = activities.filter(activity => activity.kind === 'tool-call' || activity.kind === 'tool-result')
+    expect(tools.length).toBe(2)
+    expect(tools.some(activity => activity.renderer !== undefined)).toBe(false)
     await runtime.dispose()
   })
 

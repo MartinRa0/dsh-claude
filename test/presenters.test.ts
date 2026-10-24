@@ -3,12 +3,9 @@ import type { ToolResult } from '@deepseek-ai/dsh-tools'
 import {
   bashCallView,
   claudePresenterDefinitions,
-  CLAUDE_PRESENTER_NAMES,
   diffCallView,
   diffResultView,
-  dynamicPresenterDefinition,
   fetchCallView,
-  genericCallView,
   readCallView,
   searchCallView,
   searchResultView,
@@ -110,8 +107,6 @@ describe('Claude presenter views', () => {
     const definitions = claudePresenterDefinitions()
     expect(definitions.map(definition => definition.name)).toContain('Bash')
     expect(definitions.length).toBe(14)
-    expect(CLAUDE_PRESENTER_NAMES.has('Bash')).toBe(true)
-    expect(CLAUDE_PRESENTER_NAMES.size).toBe(14)
     for (const definition of definitions) {
       expect(definition.output.render({}, null)).toEqual([])
       await expect(definition.execute({}, {} as never)).rejects.toThrow(/Claude Code owns execution/)
@@ -128,19 +123,5 @@ describe('Claude presenter views', () => {
       content: [{ type: 'text', text: '## Steps\n\n1. Do the thing' }],
     })
     expect(definition?.presentCall?.({})).toBeUndefined()
-  })
-
-  it('builds dynamic mirrors for runtime-discovered tool names', async () => {
-    const definition = dynamicPresenterDefinition('mcp__obsidian__search_simple')
-    expect(definition.name).toBe('mcp__obsidian__search_simple')
-    expect(CLAUDE_PRESENTER_NAMES.has(definition.name)).toBe(false)
-    expect(definition.presentCall?.({ description: 'Search the vault' })).toMatchObject({
-      card: 'generic',
-      kind: 'other',
-      title: 'Search the vault',
-    })
-    expect(definition.presentCall?.({ query: 'Navi' })).toMatchObject({ title: 'mcp__obsidian__search_simple' })
-    await expect(definition.execute({}, {} as never)).rejects.toThrow(/Claude Code owns execution/)
-    expect(genericCallView('ToolSearch')({})).toMatchObject({ title: 'ToolSearch' })
   })
 })

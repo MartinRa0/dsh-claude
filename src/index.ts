@@ -17,7 +17,7 @@ import { resolveClaudeExecutable } from './executable.ts'
 import { ClaudeProcessLimitError, ClaudeSupervisor, ClaudeTurnBusyError, type ClaudeSteeringOutcome, type ClaudeSteeringService } from './supervisor.ts'
 import { mountClaudeSteering } from './steering.ts'
 import { createClaudeCodeAdapter } from './adapter.ts'
-import { claudeBridgeDiagnostics, registerClaudeDoctorRoutes, type ClaudeBridgeDiagnostic } from './doctor-routes.ts'
+import { claudeBridgeDiagnostics, registerClaudeDoctorRoutes, type ClaudeBootFailure, type ClaudeBridgeDiagnostic } from './doctor-routes.ts'
 import { registerClaudeProjectionRoute } from './projection-routes.ts'
 import { RepositoryStatusService, type RepositoryStatus } from './repository-status.ts'
 import type { ClaudeActivityEvent } from './events.ts'
@@ -291,7 +291,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     logger: { warn: message => { ctx.logger.warn(message) } },
     hostJobs: new ClaudeHostJobs(() => ctx.get('jobs'), message => { ctx.logger.warn(message) }),
   })
-  let resolutionError: unknown
+  // Which boot step failed decides what the Doctor reports: only a failed
+  // resolution means the executable is missing.
+  let bootFailure: ClaudeBootFailure | undefined
+  let executableResolved = false
   try {
     const resolution = await resolveClaudeExecutable(
       subprocess,
@@ -300,6 +303,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         : config.executablePath,
     )
     supervisorConfig.executablePath = resolution.path
+    executableResolved = true
     ctx.llm.registerAdapter(
       [...CLAUDE_CODE_PROVIDER_IDS],
       createClaudeCodeAdapter(supervisor, ctx.agents, ctx.attachments, agent => ctx.agentPresets.composedPreset(agent.ctx), sessionId => reviewComments.drain(sessionId), () => readRenderMode(), request => summarizeSessionTitle(supervisorConfig.executablePath, request), () => probeClaudeModels(supervisorConfig.executablePath)),
@@ -488,7 +492,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
     }, 'dsh-claude: preset model sync')
   } catch (error) {
-    resolutionError = error
+    bootFailure = { step: executableResolved ? 'initialization' : 'executable', error }
   }
   ctx.on('agent/disposed', async ({ agent }) => {
     reviewComments.disposeSession(agent.id as string)
@@ -558,7 +562,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => repositoryStatus.dispose(), 'dsh-claude: repository status cache')
   ctx.inject(['webServer'], webCtx => {
     registerClaudeClientDiagnosticsRoute(webCtx)
-    registerClaudeDoctorRoutes(webCtx, subprocess, supervisor, supervisorConfig, resolutionError)
+    registerClaudeDoctorRoutes(webCtx, subprocess, supervisor, supervisorConfig, bootFailure)
     const desktopActions = webCtx.get('desktopActions') as { requestRestart?: () => void } | undefined
     registerClaudeUpdateRoutes(webCtx, subprocess, {
       ...(typeof desktopActions?.requestRestart === 'function'

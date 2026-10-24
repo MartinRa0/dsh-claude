@@ -68,7 +68,7 @@ describe('Claude Doctor Web route', () => {
       defaultModel: 'default',
       idleTimeoutMs: 1_000,
       maxProcesses: 4,
-    }, new Error('Claude Code executable not found'))
+    }, { step: 'executable', error: new Error('Claude Code executable not found') })
     const res = response()
     await ctx.captured.handler(request({ host: 'localhost:56454' }), res)
     expect(res.statusCode).toBe(200)
@@ -80,6 +80,30 @@ describe('Claude Doctor Web route', () => {
     })
   })
 
+  it('reports a failure after resolution as initialization, not a missing executable', async () => {
+    const ctx = Object.assign(context(), {
+      agents: { list: () => [] },
+      get: () => undefined,
+    }) as Context & { captured: Captured }
+    const found = {
+      resolveExecutable: vi.fn(async () => '/usr/local/bin/claude'),
+      spawn: vi.fn(() => { throw new Error('probe not needed') }),
+    } as unknown as ExecutableRuntime
+    registerClaudeDoctorRoutes(ctx, found, supervisor, {
+      executablePath: '/usr/local/bin/claude',
+      defaultModel: 'default',
+      idleTimeoutMs: 1_000,
+      maxProcesses: 4,
+    }, { step: 'initialization', error: new Error('an adapter for provider "claude" is already registered') })
+    const res = response()
+    await ctx.captured.handler(request({ host: 'localhost:56454' }), res)
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body)).toMatchObject({
+      executable: { status: 'found', path: '/usr/local/bin/claude' },
+      initialization: { status: 'failed', message: 'an adapter for provider "claude" is already registered' },
+    })
+  })
+
   it('rejects attacker-controlled Host/Origin combinations', async () => {
     const ctx = context()
     registerClaudeDoctorRoutes(ctx, runtime, supervisor, {
@@ -87,7 +111,7 @@ describe('Claude Doctor Web route', () => {
       defaultModel: 'default',
       idleTimeoutMs: 1_000,
       maxProcesses: 4,
-    }, new Error('Claude Code executable not found'))
+    }, { step: 'executable', error: new Error('Claude Code executable not found') })
     for (const headers of [
       { host: 'rebinding.example:56454', origin: 'http://rebinding.example:56454' },
       { host: 'localhost:56454', origin: 'http://rebinding.example:56454' },
