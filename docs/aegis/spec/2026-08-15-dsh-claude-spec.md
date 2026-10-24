@@ -109,6 +109,8 @@ The bundle adds:
 
 The preset contains no DSH model-facing filesystem, shell, skill, web, goal, todo, workflow, or subagent tools. Claude Code owns those capabilities. It may include only the route plugin and a minimal persona/presentation contribution needed by DSH.
 
+A preset carries no model, and a session's model selection doubles as the profile default, so a blank session can sit on the other side's model after a preset switch or after the default was last picked on the other side. The host bundle keeps a blank ordinary session (no request header yet, not a subagent) on its preset's side: on `agent-preset/selected`, and on `agent/created` once the preset composition settles, a session under `claude` holding a non-Claude model, or under any other preset holding a Claude model, is moved through `sessionController.selectModel` to the last model seen on that side. Without one, the Claude side uses the configured default alias and the other side the first model of the first non-Claude provider that lists any. The remembered models live in memory only; a refused selection is logged and leaves the session as it was.
+
 ## 3. Host Components
 
 ### 3.1 Executable resolver and Doctor
