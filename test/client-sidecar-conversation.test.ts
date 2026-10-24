@@ -13,7 +13,6 @@ import type { ClaudeActivityChatData } from '../src/client/conversation-sidecar.
 import {
   claudeActivityStepDefinition,
   claudeTurnDefinition,
-  nativelyRenderedStep,
   selectClaudeTurn,
   transcriptItemsForStep,
 } from '../src/client/conversation-sidecar.ts'
@@ -889,7 +888,7 @@ describe('renderer ownership per step', () => {
   const step = (overrides: Partial<ClaudeActivityEvent>[]): ClaudeActivityEvent[] =>
     overrides.map((item, index) => ({ turn: 1, step: 1, ordinal: index + 1, kind: 'text', ...item } as ClaudeActivityEvent))
 
-  it('draws nothing for a step the Host recorded under the native renderer', () => {
+  it('draws nothing for a native step whose tools the Host drew from mirrored tool events', () => {
     // The regression this guards: the Host switches renderer on the next turn
     // while a running Client keeps whatever it decided at boot. If the Client
     // decided from its own copy of the setting, the step would be drawn twice —
@@ -898,13 +897,23 @@ describe('renderer ownership per step', () => {
       { kind: 'text', text: 'Here is the plan.', renderer: 'native' },
       { kind: 'tool-call', ordinal: 2, toolUseId: 'tool-1', toolName: 'Bash', detail: '{"command":"ls"}', renderer: 'native' },
     ])
-    expect(nativelyRenderedStep(native, 1, 1)).toBe(true)
     expect(transcriptItemsForStep(native, 1, 1)).toEqual([])
+  })
+
+  it('draws only the unstamped tool cards of a native step (issue #57)', () => {
+    const native = step([
+      { kind: 'text', text: 'Here is the plan.', renderer: 'native' },
+      { kind: 'tool-call', ordinal: 2, toolUseId: 'tool-1', toolName: 'Bash', detail: '{"command":"ls"}' },
+      { kind: 'tool-result', ordinal: 3, toolUseId: 'tool-1', phase: 'completed', detail: 'listed' },
+      { kind: 'text', ordinal: 4, text: 'Done.', renderer: 'native' },
+    ])
+    const items = transcriptItemsForStep(native, 1, 1)
+    expect(items.map(item => item.kind)).toEqual(['tools'])
+    expect(items[0]).toMatchObject({ tools: [{ toolUseId: 'tool-1', toolName: 'Bash', phase: 'completed' }] })
   })
 
   it('keeps drawing a step recorded before the stamp existed or under the plugin renderer', () => {
     const legacy = step([{ kind: 'text', text: 'Here is the plan.' }])
-    expect(nativelyRenderedStep(legacy, 1, 1)).toBe(false)
     expect(transcriptItemsForStep(legacy, 1, 1)).toEqual([
       { kind: 'text', ordinal: 1, text: 'Here is the plan.' },
     ])

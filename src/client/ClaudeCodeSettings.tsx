@@ -14,6 +14,7 @@ interface DoctorReport {
   version: { status: 'ok' | 'error' | 'not-run'; value?: string; message?: string }
   authentication: { status: 'signed-in' | 'signed-out' | 'unknown' | 'not-run'; method?: string; provider?: string; subscription?: string; message?: string }
   handshake: 'not-run' | 'ok' | 'error'
+  initialization?: { status: 'failed'; message: string }
   limits: { idleTimeoutMs: number; maxProcesses: number }
   processes: { count: number; active: number }
 }
@@ -591,6 +592,7 @@ export function ClaudeCodeSettings({ t }: ClaudeCodeSettingsInjected) {
     [t('version'), value(report.version.status, report.version.value ?? report.version.message)],
     [t('authentication'), value(report.authentication.status, [report.authentication.method, report.authentication.subscription].filter(Boolean).join(' · ') || report.authentication.message)],
     [t('handshake'), report.handshake],
+    ...(report.initialization === undefined ? [] : [[t('initialization'), `${t('failed')} · ${report.initialization.message}`]]),
     [t('processes'), t('processSummary', { total: report.processes.count, active: report.processes.active })],
     [t('limits'), t('limitSummary', { max: report.limits.maxProcesses, minutes: Math.round(report.limits.idleTimeoutMs / 60_000) })],
   ]

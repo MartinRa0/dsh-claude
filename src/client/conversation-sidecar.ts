@@ -515,24 +515,6 @@ export function teammateTranscript(
   return items
 }
 
-/** Whether the Host drew this step with DSH's own renderer.
- *
- *  The stamp rides on the records themselves rather than on a Client-side copy
- *  of the setting, because the two can disagree: the Host switches on the next
- *  turn while a running Client keeps whatever it decided at boot, and the
- *  failure mode of disagreeing is drawing every step twice. Reading it back per
- *  step also keeps history honest in both directions -- a turn recorded under
- *  one renderer keeps it after the setting changes. */
-export function nativelyRenderedStep(
-  activities: readonly ClaudeActivityEvent[],
-  turn: number,
-  step: number,
-): boolean {
-  return activities.some(activity => activity.turn === turn
-    && activity.step === step
-    && activity.renderer === 'native')
-}
-
 /** The turn's own accounting, drawn as a footer.
  *
  *  It hangs off the turn rather than the step that reported it: a turn waiting
@@ -560,12 +542,14 @@ export function transcriptItemsForStep(
   step: number,
   tasks: readonly ClaudeTaskInfo[] = [],
 ): readonly ClaudeTranscriptItem[] {
-  // A natively drawn step is DSH's to paint: its prose arrived as an assistant
-  // text block and its root tools as mirrored tool cards.
-  if (nativelyRenderedStep(activities, turn, step)) return []
+  // A natively stamped record is DSH's to paint: prose arrived as an assistant
+  // text block, thinking as a reasoning block. Tool records under the native
+  // renderer are unstamped and drawn here; older native steps stamped their
+  // tools too, because the Host drew them from mirrored `tool/call` events.
   const ordered = activities
     .filter(activity => activity.turn === turn
       && activity.step === step
+      && activity.renderer !== 'native'
       && isProjectedTaskActivity(activity, tasks))
     .slice()
     .sort((left, right) => left.ordinal - right.ordinal)

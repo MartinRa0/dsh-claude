@@ -189,19 +189,6 @@ function presenterDefinition(
 
 const PRESENTATION_NOTE = 'Presentation mirror of the Claude Code tool; execution is owned by Claude Code.'
 
-/** Generic call view for dynamically observed tools (MCP tools, new built-ins). */
-export function genericCallView(toolName: string): (args: unknown) => ToolCallView | undefined {
-  return (args: unknown) => {
-    const description = str(record(args)?.description)
-    return { card: 'generic', kind: 'other', title: description ?? toolName, rawInput: args }
-  }
-}
-
-/** One presenter-only mirror for a tool name discovered at runtime. */
-export function dynamicPresenterDefinition(name: string): ToolDefinition {
-  return presenterDefinition(name, PRESENTATION_NOTE, genericCallView(name))
-}
-
 /** The presentation-only registry contributed to the Claude Code preset scope. */
 export function claudePresenterDefinitions(): ToolDefinition[] {
   return [
@@ -226,6 +213,3 @@ export function claudePresenterDefinitions(): ToolDefinition[] {
     presenterDefinition('TodoWrite', PRESENTATION_NOTE, () => genericTitle('Update todos')),
   ]
 }
-
-/** Names covered by the static preset-scope registry; dynamic mirrors skip them. */
-export const CLAUDE_PRESENTER_NAMES: ReadonlySet<string> = new Set(claudePresenterDefinitions().map(definition => definition.name))
