@@ -127,6 +127,7 @@ The executable Doctor reports:
 - CLI version
 - authentication status category when the CLI exposes it safely
 - process handshake status
+- on the Host route, an `initialization` failure when the executable resolved but a later boot step (such as adapter registration) threw; only a failed resolution reports the executable as missing
 
 Doctor never returns token values, environment secrets, keychain data, or complete settings files. The Host route additionally reports coarse supervisor and command-bridge diagnostics. The standalone CLI leaves handshake `not-run` and its exit code checks version detection, not successful authentication. Windows Host discovery resolves supported npm shims to a native executable; standalone CLI discovery is simpler.
 
@@ -211,14 +212,14 @@ Under `native`, map Claude partial output to DSH `StreamChunk`:
 - normalized failure -> throw/finish through DSH LLM error normalization
 
 Claude internal tool calls are never emitted as DSH `tool-call` chunks in
-either mode: Claude Code owns execution. Under `native` each ROOT Claude tool
-call and result is instead mirrored into the durable `tool/call` /
-`tool/result` channel, and a denied call is settled there as a failed result so
-its card cannot stay pending. A subagent's nested calls are not mirrored: they
-belong to the Task card that dispatched them and have nothing to nest under.
-Tool names outside the static presenter registry (MCP tools, new built-ins) get
-an agent-scoped presenter mirror registered on first sight. Mirroring is
-best-effort and never unsettles a Claude turn.
+either mode: Claude Code owns execution. They are not mirrored into the durable
+`tool/call` / `tool/result` channel either: session format v4 only accepts a
+`tool/call` that an `assistant/message` in the same step advertised first, and
+a Claude turn is one DSH step whose assistant message the Host settles after
+every tool has run, so a mirrored call makes the log unreadable on reload
+(issue #57). Under `native` the sidecar's tool records (calls, results,
+denials, and nested subagent calls) are left unstamped and the plugin draws
+their tool cards; prose and thinking stay with DSH.
 
 The sidecar is written identically in both modes: the diff column, task board,
 rewind, and side queries read it regardless of who paints the transcript.
@@ -294,9 +295,11 @@ A lightweight `ConversationNodeDefinition` starts exactly once at each standard 
 ### 5.2 Activity card
 
 The activity card is the `plugin` renderer's contribution. Its chat node is
-registered unconditionally; a step whose records carry the `native` stamp folds
-to no items and the node renders null, so DSH's assistant message, reasoning,
-and mirrored tool cards are the only thing drawn for it. The turn marker and
+registered unconditionally and skips every record carrying the `native` stamp,
+so DSH's assistant message and reasoning are drawn once. Under `native` the
+tool records are unstamped and still fold into this node's tool groups; steps
+recorded before that change stamped their tools too, because the Host drew
+them from mirrored `tool/call` events. The turn marker and
 every other control surface this package contributes stay mounted under both
 renderers because they have no native counterpart.
 Compaction boundaries and non-tool activity rows (status, warning) have no

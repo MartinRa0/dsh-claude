@@ -91,12 +91,19 @@ function commandDiagnostics(ctx: Context): unknown {
   }
 }
 
+/** The boot step that threw, if any. `executable` means resolution failed;
+ *  `initialization` means the executable was found and a later step failed. */
+export interface ClaudeBootFailure {
+  step: 'executable' | 'initialization'
+  error: unknown
+}
+
 export function registerClaudeDoctorRoutes(
   ctx: Context,
   runtime: ExecutableRuntime,
   supervisor: ClaudeSupervisor,
   config: ClaudeSupervisorConfig,
-  resolutionError?: unknown,
+  bootFailure?: ClaudeBootFailure,
 ): void {
   registerPluginRoute(ctx, {
     mode: 'unary',
@@ -106,7 +113,7 @@ export function registerClaudeDoctorRoutes(
     budget: 'git',
     handler: async io => {
       try {
-        if (resolutionError !== undefined) {
+        if (bootFailure?.step === 'executable') {
           return { status: 200, value: {
             executable: {
               status: 'missing',
@@ -115,7 +122,7 @@ export function registerClaudeDoctorRoutes(
             version: { status: 'not-run' },
             authentication: { status: 'not-run' },
             handshake: 'not-run',
-            message: safeMessage(resolutionError),
+            message: safeMessage(bootFailure.error),
             limits: {
               idleTimeoutMs: config.idleTimeoutMs,
               maxProcesses: config.maxProcesses,
@@ -134,6 +141,7 @@ export function registerClaudeDoctorRoutes(
         if (processes.some(process => process.claudeSessionId !== undefined)) report.handshake = 'ok'
         return { status: 200, value: {
           ...report,
+          ...(bootFailure === undefined ? {} : { initialization: { status: 'failed', message: safeMessage(bootFailure.error) } }),
           limits: {
             idleTimeoutMs: config.idleTimeoutMs,
             maxProcesses: config.maxProcesses,

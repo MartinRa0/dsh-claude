@@ -12,7 +12,6 @@ import {
   type SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { ToolCallId, createToolResultMessage } from '@deepseek-ai/dsh-llm'
 import type { ApprovalService } from '@deepseek-ai/dsh-user-approval'
 import type { UserQuestionService } from '@deepseek-ai/dsh-user-questions'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
@@ -21,7 +20,6 @@ import { DEFAULT_CLAUDE_RENDER_MODE, TASK_TOOL_NAMES, type ClaudeRenderMode } fr
 import {
   currentClaudeActivityCursor,
   redactText,
-  safeDetail,
   type ClaudeActivityCursor,
   type ClaudeActivityInput,
   type ClaudeTaskInfo,
@@ -32,7 +30,6 @@ import { PlanFeedbackGate } from './plan-feedback.ts'
 import { createUserQuestionBridge } from './user-question.ts'
 import { ClaudeSidecarRepository } from './sidecar.ts'
 import { claudePermissionMode, type ClaudePermissionMode, type ClaudePermissionSelector } from './permission-mode.ts'
-import { CLAUDE_PRESENTER_NAMES, dynamicPresenterDefinition } from './presenters.ts'
 import { normalizeSdkMessage, type NormalizedSdkMessage } from './sdk-messages.ts'
 import { claudeModelRow, claudeModelValue, recordClaudeModels } from './model-catalog.ts'
 import { readPlanUsageFrom } from './plan-usage.ts'
@@ -454,6 +451,15 @@ function rootCallSummary(toolName: string, input: unknown): string {
   return `Claude called ${toolName}`
 }
 
+/** Records the plugin draws even under the native renderer: Claude's root tool
+ *  cards, their results and denials, and the subagent calls nested in them. */
+function pluginDrawnUnderNative(activity: ClaudeActivityInput): boolean {
+  return activity.kind === 'tool-call'
+    || activity.kind === 'tool-result'
+    || (activity.kind === 'permission' && activity.toolUseId !== undefined)
+    || (activity.kind === 'subagent' && activity.parentToolUseId !== undefined)
+}
+
 export class ClaudeSupervisor {
   readonly #entries = new Map<string, SupervisorEntry>()
   readonly #interruptions = new Map<string, Promise<void>>()
@@ -472,7 +478,6 @@ export class ClaudeSupervisor {
    *  is what makes it findable afterwards. */
   readonly #logger: { warn(message: string): void } | undefined
   readonly #hostJobs: ClaudeHostJobs | undefined
-  readonly #dynamicPresenterNames = new WeakMap<Agent, Set<string>>()
   readonly #contextWindows = new Map<string, number>()
   #disposed = false
   #admissionGate: Promise<void> = Promise.resolve()
@@ -1518,13 +1523,6 @@ export class ClaudeSupervisor {
         if (message.parentToolUseId === undefined) {
           active.openCalls.set(message.toolUseId, message.toolName)
           this.#armAutoBackground(entry, active, message.toolUseId, message.toolName, message.input)
-          // Only root calls are mirrored: a subagent's nested tools belong to
-          // the Task card that dispatched them, and the native channel has no
-          // nesting to hang them under.
-          if (active.native) {
-            this.#ensureDynamicPresenter(active.agent, message.toolName)
-            await this.#appendNativeToolCall(active, message)
-          }
         }
         return
       case 'tool-result':
@@ -1542,9 +1540,6 @@ export class ClaudeSupervisor {
           detail: message.output,
           isError: message.isError,
         })
-        if (message.parentToolUseId === undefined && active.native) {
-          await this.#appendNativeToolResult(active, message)
-        }
         return
       case 'subagent':
         await this.#appendActivity(active, {
@@ -1622,16 +1617,6 @@ export class ClaudeSupervisor {
           title: message.toolName,
           summary: message.summary,
         })
-        // A denied call never produces a tool result, so the native card would
-        // stay pending forever. Settle it as the failure it is.
-        if (active.native) {
-          await this.#appendNativeToolResult(active, {
-            kind: 'tool-result',
-            toolUseId: message.toolUseId,
-            output: message.summary,
-            isError: true,
-          })
-        }
         return
     }
   }
@@ -1645,67 +1630,6 @@ export class ClaudeSupervisor {
       ...usage,
       durationMs: Math.max(0, now - active.startedAt),
       ...(active.firstOutputAt === undefined ? {} : { ttftMs: Math.max(0, active.firstOutputAt - active.startedAt) }),
-    }
-  }
-
-  /** Register one presenter-only mirror for a tool name the static preset
-   *  registry does not cover (MCP tools, newly added built-ins). Runs in the
-   *  agent scope so the mirror is visible only to this preset's sessions and
-   *  unwinds with the agent; failure keeps the generic card, never the turn. */
-  #ensureDynamicPresenter(agent: Agent, name: string): void {
-    if (CLAUDE_PRESENTER_NAMES.has(name)) return
-    let known = this.#dynamicPresenterNames.get(agent)
-    if (known === undefined) {
-      known = new Set<string>()
-      this.#dynamicPresenterNames.set(agent, known)
-    }
-    if (known.has(name)) return
-    try {
-      agent.ctx.tools.register(dynamicPresenterDefinition(name))
-      known.add(name)
-    } catch {
-      // A late or disposed agent keeps the generic card; presentation must
-      // never unsettle the Claude turn.
-    }
-  }
-
-  /** Mirror one root Claude tool call into the durable native tool channel so
-   *  the host's tool presentation renders it exactly like a DSH-executed call.
-   *  Presentation duplication is best-effort and never unsettles the turn. */
-  async #appendNativeToolCall(
-    active: ActiveTurn,
-    message: Extract<NormalizedSdkMessage, { kind: 'tool-call' }>,
-  ): Promise<void> {
-    try {
-      await active.agent.session.append('tool/call', {
-        turn: active.cursor.turn,
-        step: active.cursor.step,
-        callId: ToolCallId(message.toolUseId),
-        name: message.toolName,
-        arguments: safeDetail(message.input) ?? '{}',
-      })
-    } catch {
-      // Presentation duplication must never unsettle the Claude turn.
-    }
-  }
-
-  async #appendNativeToolResult(
-    active: ActiveTurn,
-    message: Pick<Extract<NormalizedSdkMessage, { kind: 'tool-result' }>, 'kind' | 'toolUseId' | 'output' | 'isError'>,
-  ): Promise<void> {
-    const text = typeof message.output === 'string' ? redactText(message.output) : safeDetail(message.output) ?? ''
-    try {
-      await active.agent.session.append('tool/result', {
-        turn: active.cursor.turn,
-        step: active.cursor.step,
-        message: createToolResultMessage({
-          callId: ToolCallId(message.toolUseId),
-          content: [{ type: 'text', text }],
-          isError: message.isError,
-        }),
-      }, { surfaceOp: 'append' })
-    } catch {
-      // Presentation duplication must never unsettle the Claude turn.
     }
   }
 
@@ -2157,9 +2081,12 @@ export class ClaudeSupervisor {
     await this.#sidecar.appendActivity(active.agent.id as string, {
       ...activity,
       // Stamp the renderer this record was produced for. The Client reads it
-      // back per step, so a step drawn natively is never also drawn by the
+      // back per record, so what DSH draws natively is never also drawn by the
       // plugin transcript -- and history keeps whichever renderer produced it.
-      ...(active.native ? { renderer: 'native' as const } : {}),
+      // Tool records stay unstamped: the v4 session format only accepts a
+      // `tool/call` its own assistant message advertised (issue #57), so the
+      // plugin draws Claude's tool cards under both renderers.
+      ...(active.native && !pluginDrawnUnderNative(activity) ? { renderer: 'native' as const } : {}),
       turn: active.cursor.turn,
       step: active.cursor.step,
       ordinal,
@@ -2268,15 +2195,6 @@ export class ClaudeSupervisor {
         summary,
         isError: true,
       })
-      // The native card has the same hole, and the same fix as a denied call.
-      if (active.native) {
-        await this.#appendNativeToolResult(active, {
-          kind: 'tool-result',
-          toolUseId,
-          output: summary,
-          isError: true,
-        })
-      }
     }
   }
 
