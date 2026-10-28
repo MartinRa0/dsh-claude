@@ -325,3 +325,15 @@ describe('Claude sidecar repository', () => {
     unsubscribe()
   })
 })
+
+describe('teammate model persistence', () => {
+  it('retains requested and observed routes through an independent repository read', async () => {
+    const store = await repository()
+    await store.writeTasks('models', [{ taskId: 'child', description: 'review', status: 'completed', bridge: true,
+      requestedProvider: 'example', requestedModel: 'alias', actualProvider: 'example', actualModel: 'observed' }])
+    const reloaded = new ClaudeSidecarRepository({ root: store.root })
+    expect((await reloaded.read('models')).tasks?.tasks[0]).toMatchObject({
+      bridge: true, requestedModel: 'alias', actualModel: 'observed', actualProvider: 'example',
+    })
+  })
+})

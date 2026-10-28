@@ -8,7 +8,7 @@ import * as styles from './styles.ts'
 import { teammateTranscript } from './conversation-sidecar.ts'
 import { ClaudeTranscriptFlow } from './ClaudeActivityNode.tsx'
 import { ClaudeMarkdown, useClaudeMarkdownLabels } from './markdown-labels.tsx'
-import { deriveTeam, memberStatusKey } from './team.ts'
+import { deriveTeam, memberStatusKey, memberModelLabel } from './team.ts'
 
 export interface ClaudeTeammatePanelInjected {
   t: (key: ClaudeCodeSettingsKey, params?: Record<string, unknown>) => string
@@ -63,6 +63,7 @@ export function ClaudeTeammatePanel({ t, closeDetails, taskId, useClaudeProjecti
           <>
             <div className="dsh-claude-teammate-meta">
               <span>{t(memberStatusKey(member.status))}</span>
+              <span>{memberModelLabel(member, t)}</span>
               {member.usage?.toolUses === undefined ? null : <span>{t('teammateToolUses', { count: member.usage.toolUses })}</span>}
               {member.lastToolName === undefined ? null : <span>{member.lastToolName}</span>}
             </div>

@@ -5,7 +5,7 @@ import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClaudeTaskInfo, ClaudeTaskStatus } from '../events.ts'
 import type { ClaudeClientProjection } from './projection.ts'
 import type { ClaudeCodeSettingsKey } from './locales.ts'
-import { LEAD_NAME, deriveTeam, memberStatusKey, taskStatusKey, type ClaudeTeamTaskStatus } from './team.ts'
+import { LEAD_NAME, deriveTeam, memberStatusKey, memberModelLabel, taskStatusKey, type ClaudeTeamTaskStatus } from './team.ts'
 
 export interface ClaudeTeamHeaderActionInjected {
   t: (key: ClaudeCodeSettingsKey, params?: Record<string, unknown>) => string
@@ -173,7 +173,7 @@ export function ClaudeTeamHeaderAction({ t, sessionId, openTeammate, useClaudePr
                     <span className="dsh-claude-team-member-dot"><StateDot state={memberDot(member.status)} /></span>
                     <span className="dsh-claude-team-member-text">
                       <span className="dsh-claude-team-member-name"><span className="dsh-claude-team-member-name-text">{member.name}</span></span>
-                      <small>{t(memberStatusKey(member.status))}{member.lastToolName === undefined ? '' : ` · ${member.lastToolName}`}</small>
+                      <small>{t(memberStatusKey(member.status))} · {memberModelLabel(member, t)}{member.lastToolName === undefined ? '' : ` · ${member.lastToolName}`}</small>
                     </span>
                   </button>
                 ))}

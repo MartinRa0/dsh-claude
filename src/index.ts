@@ -1,3 +1,4 @@
+import { dshSubagentBridgeFactory } from './dsh-subagent-bridge.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import { dirname, join } from 'node:path'
 import type {} from '@deepseek-ai/dsh-attachment'
@@ -278,6 +279,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     setPolicy: (agent, policy) => { ctx.approval.setPolicy(agent, policy as never) },
   }
   const supervisor = new ClaudeSupervisor({
+    subagentBridge: dshSubagentBridgeFactory(ctx),
     runtime: subprocess,
     approval: ctx.approval,
     userQuestions: ctx.userQuestions,

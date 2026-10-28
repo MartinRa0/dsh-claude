@@ -177,3 +177,28 @@ describe('ClaudeTranscriptToolItem background control', () => {
     expect(renderToStaticMarkup(<ClaudeTranscriptToolItem tool={tool({})} t={t} />)).not.toContain('Move to background')
   })
 })
+
+describe('teammate model labels', () => {
+  const renderModel = (model: Partial<ClaudeTaskInfo>) => {
+    const task: ClaudeTaskInfo = { taskId: 'bridge-child', taskType: 'local_agent',
+      description: 'Review source', status: 'completed', ...model }
+    return renderToStaticMarkup(<ClaudeTeammatePanel t={t} closeDetails={vi.fn()}
+      taskId={task.taskId} useClaudeProjection={hook(true, [task], [])} />)
+  }
+
+  it('renders the observed Host route and effort instead of the requested alias', () => {
+    const markup = renderModel({ actualProvider: 'openai-codex', actualModel: 'example-model',
+      actualReasoningEffort: 'high', requestedProvider: 'other', requestedModel: 'requested-alias', bridge: true })
+    expect(markup).toContain('Model: openai-codex/example-model · high')
+    expect(markup).not.toContain('requested-alias')
+  })
+
+  it('marks a requested route as unverified when execution was not observed', () => {
+    expect(renderModel({ requestedProvider: 'example', requestedModel: 'chosen' }))
+      .toContain('Requested model: example/chosen (unverified)')
+  })
+
+  it('does not infer historical teammate models from the Lead', () => {
+    expect(renderModel({})).toContain('Model: unavailable')
+  })
+})

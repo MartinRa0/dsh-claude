@@ -259,7 +259,33 @@ export interface ClaudeTaskUsage {
   durationMs?: number
 }
 
-export interface ClaudeTaskInfo {
+/** Requested route and observed Host execution route are deliberately separate. */
+export interface ClaudeTaskModelInfo {
+  requestedProvider?: string
+  requestedModel?: string
+  requestedReasoningEffort?: string
+  actualProvider?: string
+  actualModel?: string
+  actualReasoningEffort?: string
+  bridge?: true
+}
+
+const TASK_MODEL_KEYS = [
+  'requestedProvider', 'requestedModel', 'requestedReasoningEffort',
+  'actualProvider', 'actualModel', 'actualReasoningEffort',
+] as const
+
+/** Preserve only bounded, redacted model metadata across sidecar reloads. */
+export function taskModelInfo(task: ClaudeTaskModelInfo): ClaudeTaskModelInfo {
+  const result: ClaudeTaskModelInfo = {}
+  for (const key of TASK_MODEL_KEYS) {
+    if (typeof task[key] === 'string') result[key] = redactText(task[key], 256)
+  }
+  if (task.bridge === true) result.bridge = true
+  return result
+}
+
+export interface ClaudeTaskInfo extends ClaudeTaskModelInfo {
   taskId: string
   /** The tool call that dispatched the task; joins the task to its call's input. */
   toolUseId?: string
@@ -310,6 +336,7 @@ export function normalizeTasksEvent(tasks: readonly ClaudeTaskInfo[]): ClaudeTas
         ...(task.lastToolName === undefined ? {} : { lastToolName: redactText(task.lastToolName, 64) }),
         ...(task.summary === undefined ? {} : { summary: redactText(task.summary, MAX_TASK_TEXT_CHARS) }),
         ...(usage === undefined ? {} : { usage }),
+        ...taskModelInfo(task),
         ...(task.backgrounded === true ? { backgrounded: true } : {}),
       }
     }),

@@ -26,6 +26,7 @@ import {
   type ClaudeUsage,
 } from './events.ts'
 import { createAutoModeEscalation, createPermissionBridge } from './permission.ts'
+import { DSH_BRIDGE_TOOLS, type DshSubagentBridge, type DshSubagentBridgeFactory } from './dsh-subagent-bridge.ts'
 import { PlanFeedbackGate } from './plan-feedback.ts'
 import { createUserQuestionBridge } from './user-question.ts'
 import { ClaudeSidecarRepository } from './sidecar.ts'
@@ -298,6 +299,8 @@ interface SupervisorEntry {
   reportedUnknownTypes: Set<string>
   /** Live Claude task board (subagents and background tasks), keyed by task id. */
   tasks: Map<string, ClaudeTaskInfo>
+  dshBridge?: DshSubagentBridge | undefined
+  observedSubagentModels: Map<string, Pick<ClaudeTaskInfo, 'actualProvider' | 'actualModel'>>
   /** Claude's task-tool list (TaskCreate / TaskUpdate), mirrored into the Host to-do dock. */
   taskBoard: ClaudeTaskBoard
   /** Last time a task snapshot was persisted (progress throttling). */
@@ -478,6 +481,7 @@ export class ClaudeSupervisor {
    *  is what makes it findable afterwards. */
   readonly #logger: { warn(message: string): void } | undefined
   readonly #hostJobs: ClaudeHostJobs | undefined
+  readonly #subagentBridge: DshSubagentBridgeFactory | undefined
   readonly #contextWindows = new Map<string, number>()
   #disposed = false
   #admissionGate: Promise<void> = Promise.resolve()
@@ -510,6 +514,8 @@ export class ClaudeSupervisor {
     logger?: { warn(message: string): void }
     /** Mirror of detached tasks into the Host's background-job list. */
     hostJobs?: ClaudeHostJobs
+    /** Optional Host-owned delegation seam; older Hosts continue with native Claude agents. */
+    subagentBridge?: DshSubagentBridgeFactory
   }) {
     this.#runtime = dependencies.runtime
     this.#approval = dependencies.approval
@@ -522,6 +528,7 @@ export class ClaudeSupervisor {
     this.#permissionSelector = dependencies.permissionSelector ?? (async () => 'plugin')
     this.#logger = dependencies.logger
     this.#hostJobs = dependencies.hostJobs
+    this.#subagentBridge = dependencies.subagentBridge
   }
 
   snapshots(): ClaudeSupervisorSnapshot[] {
@@ -1246,6 +1253,7 @@ export class ClaudeSupervisor {
       initialized: false,
       idleTimer: undefined,
       tasks: new Map<string, ClaudeTaskInfo>(),
+      observedSubagentModels: new Map(),
       taskBoard: new ClaudeTaskBoard(),
       taskSnapshotAt: 0,
       taskSnapshotTimer: undefined,
@@ -1268,11 +1276,24 @@ export class ClaudeSupervisor {
     }
     const userQuestion = createUserQuestionBridge(this.#userQuestions, activeInteraction)
     const canUseTool = createPermissionBridge(this.#approval, activeInteraction, userQuestion, this.planFeedback)
+    entry.dshBridge = this.#subagentBridge?.({
+      parent: agent, lifetimeSignal: lifetime.signal, activeContext: () => entry.active,
+      publish: async task => {
+        entry.tasks.set(task.taskId, task)
+        await this.#flushTasksSnapshot(entry)
+        if (task.status !== 'running') this.#hostJobs?.settled(entry.sessionId, task.taskId, task.status, task.summary)
+      },
+      onStarted: (task, stop) => this.#hostJobs?.started(entry.sessionId, task.taskId, 'subagent', task.description, async () => { stop() }),
+    })
+    const hooks = createAutoModeEscalation()
+    if (entry.dshBridge !== undefined) {
+      hooks.PreToolUse = [{ hooks: [entry.dshBridge.guardNative] }, ...(hooks.PreToolUse ?? [])]
+    }
     const options: ClaudeOptions = {
       pathToClaudeCodeExecutable: this.#config.executablePath,
       cwd,
       settingSources: ['user', 'project', 'local'],
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: SYSTEM_PROMPT_APPEND },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: SYSTEM_PROMPT_APPEND + (entry.dshBridge === undefined ? '' : '\n' + entry.dshBridge.instructions) },
       tools: { type: 'preset', preset: 'claude_code' },
       includePartialMessages: true,
       // The Host job list renders a per-task stop control (see host-jobs.ts).
@@ -1285,7 +1306,12 @@ export class ClaudeSupervisor {
       permissionMode,
       allowDangerouslySkipPermissions: true,
       canUseTool,
-      hooks: createAutoModeEscalation(),
+      hooks,
+      ...(entry.dshBridge === undefined ? {} : {
+        mcpServers: { dsh_subagents: entry.dshBridge.server },
+        // Only the policy-checked bridge is auto-allowed; child tools retain Host permissions.
+        allowedTools: [...DSH_BRIDGE_TOOLS],
+      }),
       abortController: lifetime,
       spawnClaudeCodeProcess: createManagedClaudeSpawner(this.#runtime, this.#config.executablePath, process => {
         entry.process = process
@@ -1328,6 +1354,15 @@ export class ClaudeSupervisor {
   async #pump(entry: SupervisorEntry): Promise<void> {
     try {
       for await (const sdkMessage of entry.query) {
+        if (sdkMessage.type === 'assistant' && sdkMessage.parent_tool_use_id && sdkMessage.message.model) {
+          const route = { actualProvider: 'claude', actualModel: sdkMessage.message.model }
+          entry.observedSubagentModels.set(sdkMessage.parent_tool_use_id, route)
+          for (const task of entry.tasks.values()) {
+            if (task.toolUseId !== sdkMessage.parent_tool_use_id) continue
+            Object.assign(task, route)
+            await this.#scheduleTasksSnapshot(entry, false)
+          }
+        }
         const chainUuid = chainEntryUuid(sdkMessage as SDKMessage)
         if (chainUuid !== undefined) entry.lastChainUuid = chainUuid
         for (const message of normalizeSdkMessage(sdkMessage as SDKMessage)) {
@@ -1661,6 +1696,11 @@ export class ClaudeSupervisor {
     const usage = message.usage ?? previous?.usage
     if (usage !== undefined) next.usage = usage
     if (previous?.backgrounded === true) next.backgrounded = true
+    const observedModel = toolUseId === undefined ? undefined : entry.observedSubagentModels.get(toolUseId)
+    const actualProvider = observedModel?.actualProvider ?? previous?.actualProvider
+    const actualModel = observedModel?.actualModel ?? previous?.actualModel
+    if (actualProvider !== undefined) next.actualProvider = actualProvider
+    if (actualModel !== undefined) next.actualModel = actualModel
     entry.tasks.set(taskId, next)
     const settled = next.status !== 'running'
     if (next.status !== 'running') {
@@ -2203,6 +2243,7 @@ export class ClaudeSupervisor {
     if (active === undefined || entry.state === 'interrupting') return
     entry.state = 'interrupting'
     active.aborted = true
+    entry.dshBridge?.cancelAll()
     active.output.fail(abortFailure())
     await this.#upsertTranscriptText(active)
     let interruptError: unknown
@@ -2296,6 +2337,7 @@ export class ClaudeSupervisor {
   /** @param reason - why the plugin is ending this process; it travels into the
    *  turn's failure text, so a kill the plugin asked for names its cause. */
   async #disposeEntry(entry: SupervisorEntry, reason: string): Promise<void> {
+    entry.dshBridge?.cancelAll()
     if (entry.state === 'disposed') return
     entry.disposeReason = reason
     if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer)

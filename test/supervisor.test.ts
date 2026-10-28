@@ -2993,3 +2993,45 @@ describe('Claude native renderer mirroring', () => {
     await runtime.dispose()
   })
 })
+
+describe('DSH delegation integration', () => {
+  it('installs only the two bridge tools and tears down the bridge on cancellation', async () => {
+    const transport = factory()
+    const owner = fakeAgent('dsh-bridge-owner')
+    const root = join(tmpdir(), `dsh-claude-bridge-supervisor-${randomUUID()}`)
+    sidecarRoots.push(root)
+    const store = new ClaudeSidecarRepository({ root })
+    const cancelAll = vi.fn()
+    const guardNative = vi.fn(async () => ({}))
+    let bridgeContext: import('../src/dsh-subagent-bridge.ts').DshSubagentBridgeContext | undefined
+    const runtime = new ClaudeSupervisor({
+      runtime: { spawn: () => { throw new Error('test must not spawn') } },
+      approval: { request: async () => 'rejected' },
+      userQuestions: { ask: async () => ({ answers: [] }) },
+      config: { executablePath: '/local/claude', idleTimeoutMs: 60_000, maxProcesses: 4, defaultModel: 'default' },
+      queryFactory: transport.create,
+      sidecar: store,
+      subagentBridge: context => {
+        bridgeContext = context
+        return { cancelAll, guardNative, server: { type: 'sdk', name: 'dsh_subagents' },
+          instructions: 'Use only authorized DSH routes.' } as never
+      },
+    })
+    try {
+      const output = await runtime.runTurn({ agent: owner.agent, prompt: 'review' })
+      const query = transport.queries[0]!
+      expect(query.options.allowedTools).toEqual(['mcp__dsh_subagents__list_models', 'mcp__dsh_subagents__delegate'])
+      expect(query.options.mcpServers).toHaveProperty('dsh_subagents')
+      expect(query.options.hooks?.PreToolUse?.[0]?.hooks[0]).toBe(guardNative)
+      await bridgeContext!.publish({ taskId: 'host-child', description: 'review', status: 'completed',
+        actualProvider: 'example', actualModel: 'executed', bridge: true })
+      expect((await store.read(owner.agent.id)).tasks?.tasks[0]?.actualModel).toBe('executed')
+      query.push(init())
+      query.push(result('done'))
+      await collect(output)
+    } finally {
+      await runtime.dispose()
+    }
+    expect(cancelAll).toHaveBeenCalled()
+  })
+})

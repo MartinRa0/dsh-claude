@@ -9,14 +9,15 @@
  * carries the spawning call id and the activity log every call's input, so
  * roster, board, and mailbox are derived here without a server-side projection.
  */
-import type { ClaudeActivityEvent, ClaudeTaskInfo, ClaudeTaskStatus, ClaudeTaskUsage } from '../events.ts'
+import { taskModelInfo, type ClaudeActivityEvent, type ClaudeTaskInfo, type ClaudeTaskModelInfo, type ClaudeTaskStatus, type ClaudeTaskUsage } from '../events.ts'
+import type { ClaudeCodeSettingsKey } from './locales.ts'
 import { createdTaskId } from '../todo-bridge.ts'
 
 export const TEAMMATE_TASK_TYPE = 'in_process_teammate'
 export const SUBAGENT_TASK_TYPE = 'local_agent'
 export const LEAD_NAME = 'lead'
 
-export interface ClaudeTeamMember {
+export interface ClaudeTeamMember extends ClaudeTaskModelInfo {
   taskId: string
   name: string
   role: 'lead' | 'teammate'
@@ -105,6 +106,8 @@ export function deriveTeam(activities: readonly ClaudeActivityEvent[], tasks: re
       taskId: task.taskId,
       name: text(spawn?.name) ?? task.description,
       role: 'teammate',
+      ...taskModelInfo(task),
+      ...(task.actualModel === undefined && typeof spawn?.model === 'string' ? { requestedModel: spawn.model } : {}),
       status: task.status,
       description: text(spawn?.description) ?? task.description,
       ...(task.toolUseId === undefined ? {} : { toolUseId: task.toolUseId }),
@@ -199,4 +202,20 @@ export function memberStatusKey(status: ClaudeTaskStatus): 'teamStatusRunning' |
 
 export function taskStatusKey(status: ClaudeTeamTaskStatus): 'teamTaskPending' | 'teamTaskInProgress' | 'teamTaskCompleted' {
   return status === 'pending' ? 'teamTaskPending' : status === 'in_progress' ? 'teamTaskInProgress' : 'teamTaskCompleted'
+}
+
+/** Never substitute a Lead model for a teammate with missing execution metadata. */
+export function memberModelLabel(
+  member: ClaudeTaskModelInfo,
+  t: (key: ClaudeCodeSettingsKey) => string,
+): string {
+  if (member.actualModel !== undefined) {
+    const route = member.actualProvider === undefined ? member.actualModel : `${member.actualProvider}/${member.actualModel}`
+    return `${t('teamModel')}: ${route}${member.actualReasoningEffort === undefined ? '' : ` · ${member.actualReasoningEffort}`}`
+  }
+  if (member.requestedModel !== undefined) {
+    const route = member.requestedProvider === undefined ? member.requestedModel : `${member.requestedProvider}/${member.requestedModel}`
+    return `${t('teamRequestedModel')}: ${route} (${t('teamModelUnverified')})`
+  }
+  return `${t('teamModel')}: ${t('teamModelUnavailable')}`
 }

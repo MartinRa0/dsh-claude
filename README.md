@@ -1,5 +1,9 @@
 # dsh-claude
 
+This fork adds DSH-authorized multi-provider subagents to the Claude preset,
+including provider/model labels in the team UI. See the
+[bridge guide](docs/dsh-subagent-bridge.md) for compatibility, behavior and validation.
+
 ## Attention Please
 
 ## 1. Overview
@@ -31,7 +35,7 @@ Wait for the profile rebuild to finish, then quit DSH Desktop completely and reo
 ### Install from source
 
 ```sh
-git clone https://github.com/Norman-else/dsh-claude.git
+git clone https://github.com/MartinRa0/dsh-claude.git
 cd dsh-claude
 pnpm install
 pnpm check

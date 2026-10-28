@@ -36,7 +36,7 @@ Ship an out-of-tree DSH bundle named `dsh-claude` that adds a `Claude Code CLI` 
 - Use the local Claude Code executable; do not call the Anthropic Messages API directly.
 - Reuse the user's existing Claude authentication and `~/.claude` configuration.
 - Do not store or return Claude credentials.
-- Do not expose DSH tools to Claude as a second agent loop.
+- Do not expose the native DSH filesystem/shell toolset as a second main-agent loop. This fork optionally exposes only policy-checked model discovery and delegation tools; DSH owns their child activations (see section 5.3.2).
 - Do not represent Claude-owned tool calls as DSH-owned tool execution.
 - Do not automatically replay a prompt whose side-effect outcome is unknown.
 - macOS was the initial validation platform. Current code also includes Windows executable and runner compatibility; platform-specific verification must be recorded separately.
@@ -334,6 +334,23 @@ Claude's own task list reaches the Host's to-do dock above the composer. Claude 
 ### 5.3.1 Agent Team
 
 Claude Code's native Agent Team is rendered by the plugin in the seat the Host gives its own team roster: a `conversation.session.header.actions` entry beside the title, drawn like the Host's (`IconUsersOutlineRegular` trigger, fixed panel with member and task cards), that appears once the session has a teammate or a shared task, and a `claude-teammate` right-sidebar tab per member. The Host's experimental `agent-team` entry can only ever show the Lead for a Claude session, so host-chrome.ts hides it in any header where the plugin roster mounted. Every subagent is a member: an `in_process_teammate` task or any `Agent` call running as a `local_agent` task, named or not (the CLI (2.1.x) initializes a session team only for interactive launches, so over the SDK even a named agent runs as `local_agent`). Members are joined to the spawning call on `toolUseId` for the name, falling back to its description; only named ones are addressable through `SendMessage`. The flag (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in the spawn environment) and `teammateMode: 'in-process'` stay set so a CLI that lifts that restriction upgrades in place. Nothing is projected server-side for it: the client derives the team from the sidecar. the shared task list is folded from `TaskCreate` results and `TaskUpdate` patches; mail is every `SendMessage` call, attributed to the member whose call it ran under, else the Lead. The teammate tab draws the member as a conversation: the Lead's brief (the spawning call's prompt) as the opening turn, then the member's own prose and tool cards in order (`forwardSubagentText` is on, and subagent text blocks are recorded as `text` activities under their `parentToolUseId`, one copy per block; the lead step's transcript skips them), then its report (the task's settlement summary). Mail appears there as the `SendMessage` tool cards it is. Teammates also register in the Host job list as `subagent`, which carries the stop control; the plugin adds no messaging or task-editing controls of its own.
+
+### 5.3.2 Optional Host-owned delegation in this fork
+
+When the Host exposes its public subagent model-selection settings and managed
+activation APIs, this fork supplies a Claude SDK MCP server with two tools:
+model discovery and delegation. The Host's exact selected routes authorize
+admission; the bridge rechecks after preflight and uses an independent standard
+preset, or the Claude preset for a selected Claude Code adapter. DSH owns child
+execution, permission inheritance, depth, capacity and teardown. Claude still
+owns the main agent loop and every native Claude tool call.
+
+A PreToolUse hook rejects native Claude delegation while Host model selection
+is enabled; it remains available when that preference is disabled. The bridge
+is absent on older Hosts missing the required optional APIs. Team and task
+sidecars carry requested and observed model metadata separately; missing
+execution evidence is labelled unverified rather than inferred from the Lead.
+The [bridge guide](../../dsh-subagent-bridge.md) records the contract and limits.
 
 ### 5.4 Context meter
 
